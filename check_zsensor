@@ -1,0 +1,217 @@
+#!/bin/bash
+
+# Icinga plugin to check teperatureor humidity on zSensor over http
+#
+# Updates night be available at https://github.com/ZsZs73/check_zsensor
+#
+#-----BEGIN LICENSE-----
+# Licensed under the MIT License: https://opensource.org/licenses/MIT
+# Copyright 2019 Zsolt Zsiros
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this 
+# software and associated documentation files (the "Software"), to deal in the Software 
+# without restriction, including without limitation the rights to use, copy, modify, merge,
+# publish, distribute, sublicense, and/or sell copies of the Software, and to permit 
+# persons to whom the Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all copies or
+# substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULA
+# PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+# FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+#-----END LICENSE-----
+
+SCRIPT=${0##*/}
+VERSION="1.0"
+
+# Plugin exit codes
+STATE_OK=0
+STATE_WARNING=1
+STATE_CRITICAL=2
+STATE_UNKNOWN=3
+
+# Default values
+TEMPCRITLOWDEF="5"
+TEMPWARNLOWDEF="10"
+TEMPWARNHIGHDEF="27"
+TEMPCRITHIGHDEF="35"
+RHUMCRITLOWDEF="20"
+RHUMWARNLOWDEF="30"
+RHUMWARNHIGHDEF="70"
+RHUMCRITHIGHDEF="80"
+TIMEOUTDEF="55"
+TYPEDEF="temp"
+
+trap cleanup EXIT
+
+cleanup() {
+  rm $CURLRESP $CURLERR 2>/dev/null
+}
+
+usage() {
+  cat <<EOF
+  Usage: ${scr} -H hostname [-c critlow] [-w warnlow] [-C crithigh] [-W warnhigh] [-t timeout] [-T type]
+
+  Check sensor temperature value via HTTP
+
+ -V  Plugin version
+ -h  This help
+ -t  cURL tiomeout in seconds (default: $TIMEOUTDEF)
+ -T  checktype: temp or rhum (default: $TYPEDEF
+ -c  Critical low threshold  (default: temp: $TEMPCRITLOWDEF, rhum: $RHUMCRITLOWDEF)
+ -w  Warning low threshold   (default: temp: $TEMPWARNLOWDEF, rhum: $RHUMWARNLOWDEF)
+ -W  Warning high threshold  (default: temp: $TEMPWARNHIGHDEF, rhum: $RHUMWARNHIGHDEF)
+ -C  Critical high threshold (default: temp: $TEMPCRITHIGHDEF, rhum: $RHUMCRITHIGHDEF)
+ -H  Hostname (ip) of the sensor
+EOF
+  exit $STATE_UNKNOWN
+}
+
+makeTempFile() {
+  mktemp --tmpdir -t ${SCRIPT}XXXXXX 2>/dev/null || echo "${TMPDIR:-/tmp}/${SCRIPT}.$RANDOM.$$"
+}
+
+# The following is to avoif dependency on 'bc'
+greater() { # return true if $1 is greater that $2
+  MIN=$(echo $1 $2 | awk '{if ($1 < $2) print $1; else print $2}')
+  if [[ "$2" = $MIN ]]; then
+    return 0 # true
+  else
+    return 1 # false
+  fi	
+}
+
+evalAndPrint() {
+  SENSORREADING=$1
+  if greater $CRITLOW $SENSORREADING; then
+    echo "CRITICAL - $TEXT is lower than critical low [$CRITLOW] $PERFDATA"
+    exit $STATE_CRITICAL
+  elif greater $SENSORREADING $CRITHIGH; then
+    echo "CRITICAL - $TEXT is higher than critical high [$CRITHIGH] $PERFDATA"
+    exit $STATE_CRITICAL
+  elif greater $WARNLOW $SENSORREADING; then
+    echo "WARNING - $TEXT is lower than warning low [$WARNLOW] $PERFDATA"
+    exit $STATE_WARNING
+  elif greater $SENSORREADING $WARNHIGH; then
+    echo "WARNING - $TEXT is higher than warning high [$WARNHIGH] $PERFDATA"
+    exit $STATE_WARNING
+  else
+    echo "OK - $TEXT $PERFDATA"
+    exit $STATE_OK
+  fi
+}
+
+### Main
+# Parse script arguments
+if [[ -z "$1" ]]; then
+  usage
+  exit 2
+fi
+
+while getopts Vht:iT:c:w:W:C:H: ARG
+do
+  case $ARG in
+  V)  echo "$SCRIPT version $VERSION"
+      exit $STATE_UNKNOWN;;
+  h)  usage
+      exit $STATE_UNKNOWN;;
+  t)  TIMEOUT=$OPTARG;;
+  T)  TYPE=$OPTARG;;
+  c)  CRITLOW=$OPTARG;;
+  w)  WARNLOW=$OPTARG;;
+  C)  CRITHIGH=$OPTARG;;
+  W)  WARNHIGH=$OPTARG;;
+  H)  HOSTNAME=$OPTARG;;
+  ?)  usage
+      exit $STATE_UNKNOWN;;
+  esac
+done
+shift $(($OPTIND - 1))
+
+# Validate arguments
+TIMEOUT=${TIMEOUT:=$TIMEOUTDEF}
+re='^[0-9]+$'
+if ! [[ $TIMEOUT =~ $re ]] ; then
+  echo "Error: Invalid timeout value: [$TIMEOUT]"
+  exit $STATE_UNKNOWN
+fi
+TYPE=${TYPE:=$TYPEDEF}
+re='^(temp|rhum)$'
+if ! [[ $TYPE =~ $re ]] ; then
+  echo "Error: Invalid type value: [$TYPE]"
+  exit $STATE_UNKNOWN
+fi
+if [[ $TYPE = "temp" ]]; then
+  CRITLOW=${CRITLOW:=$TEMPCRITLOWDEF}
+  WARNLOW=${WARNLOW:=$TEMPWARNLOWDEF}
+  CRITHIGH=${CRITHIGH:=$TEMPCRITHIGHDEF}
+  WARNHIGH=${WARNHIGH:=$TEMPWARNHIGHDEF}
+else
+  CRITLOW=${CRITLOW:=$RHUMCRITLOWDEF}
+  WARNLOW=${WARNLOW:=$RHUMWARNLOWDEF}
+  CRITHIGH=${CRITHIGH:=$RHUMCRITHIGHDEF}
+  WARNHIGH=${WARNHIGH:=$RHUMWARNHIGHDEF}
+fi
+re='^[0-9]+$'
+if ! [[ $CRITLOW =~ $re ]] ; then
+  echo "Error: Invalid critical low threshold value: [$CRITLOW]"
+  exit $STATE_UNKNOWN
+fi
+if ! [[ $WARNLOW =~ $re ]] ; then
+  echo "Error: Invalid warning low threshold value: [$WARNLOW]"
+  exit $STATE_UNKNOWN
+fi
+if ! [[ $CRITHIGH =~ $re ]] ; then
+  echo "Error: Invalid critical high threshold value: [$CRITHIGH]"
+  exit $STATE_UNKNOWN
+fi
+if ! [[ $WARNHIGH =~ $re ]] ; then
+  echo "Error: Invalid warning high threshold value: [$WARNHIGH]"
+  exit $STATE_UNKNOWN
+fi
+if [[ $CRITLOW -gt $WARNLOW ]] ; then
+  echo "Error: Critical low threshold value is greater than the warning low threshold value: [$CRITLOW > $WARNLOW]"
+  exit $STATE_UNKNOWN
+fi
+if [[ $WARNHIGH -gt $CRITHIGH ]] ; then
+  echo "Error: Warning high threshold value is greater than the critical high threshold value: [$WARNHIGH > $CRITHIGH]"
+  exit $STATE_UNKNOWN
+fi
+
+# Create http request
+CURLRESP=$(makeTempFile)
+CURLERR=$(makeTempFile)
+curl --fail --silent --show-error --user-agent "Monitoring plugin $SCRIPT-$VERSION@$(hostname)" --connect-timeout 5 \
+  --max-time $TIMEOUT http://$HOSTNAME -o $CURLRESP 2>$CURLERR \
+  || { echo "Error: $(cat $CURLERR)"; exit $STATE_UNKNOWN; }
+
+FWVER=$(grep 'FW-ver:' $CURLRESP | cut -d ' ' -f2)
+SENSORSTATUS=$(grep 'Sensor status:' $CURLRESP | cut -d ' ' -f3)
+SENSORSN=$(grep 'Sensor-S/N:' $CURLRESP | cut -d ' ' -f2)
+SENSORTEMP=$(grep 'Temp-C:' $CURLRESP | cut -d ' ' -f2)
+SENSORRHUM=$(grep 'RelHum-Pct:' $CURLRESP | cut -d ' ' -f2)
+
+if ! [[ -z "$FWVER" ]]; then
+  if [[ "$SENSORSTATUS" == "Ok" ]]; then
+    if [[ $TYPE = "temp" ]]; then
+      TEXT="Sensor (s/n: $SENSORSN) temperature reading: $SENSORTEMP" 
+      PERFDATA="| temp=$SENSORTEMP;$WARNLOW:$WARNHIGH;$CRITLOW:$CRITHIGH;;"
+      evalAndPrint $SENSORTEMP
+    else
+      TEXT="Sensor (s/n: $SENSORSN) relative humidity reading: $SENSORRHUM"
+      PERFDATA="| rhum=$SENSORRHUM;$WARNLOW:$WARNHIGH;$CRITLOW:$CRITHIGH;;"
+      evalAndPrint $SENSORRHUM
+    fi
+  else
+    echo "UNKNOWN - Sensor failure"
+    exit $STATE_UNKNOWN
+  fi
+else
+  echo "UNKNOWN - Invalid response from controller:"
+  head $CURLRESP
+  exit $STATE_UNKNOWN
+fi
