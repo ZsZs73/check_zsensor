@@ -49,12 +49,12 @@ TYPEDEF="temp"
 trap cleanup EXIT
 
 cleanup() {
-  rm $CURLRESP $CURLERR 2>/dev/null
+  rm "$CURLRESP" "$CURLERR" 2>/dev/null
 }
 
 usage() {
   cat <<EOF
-  Usage: ${scr} -H hostname [-c critlow] [-w warnlow] [-C crithigh] [-W warnhigh] [-t timeout] [-T type]
+  Usage: ${SCR} -H hostname [-c critlow] [-w warnlow] [-C crithigh] [-W warnhigh] [-t timeout] [-T type]
 
   Check sensor temperature value via HTTP
 
@@ -72,13 +72,13 @@ EOF
 }
 
 makeTempFile() {
-  mktemp --tmpdir -t ${SCRIPT}XXXXXX 2>/dev/null || echo "${TMPDIR:-/tmp}/${SCRIPT}.$RANDOM.$$"
+  mktemp --tmpdir -t "${SCRIPT}"XXXXXX 2>/dev/null || echo "${TMPDIR:-/tmp}/${SCRIPT}.$RANDOM.$$"
 }
 
 # The following is to avoif dependency on 'bc'
 greater() { # return true if $1 is greater that $2
-  MIN=$(echo $1 $2 | awk '{if ($1 < $2) print $1; else print $2}')
-  if [[ "$2" = $MIN ]]; then
+  MIN=$(echo "$1" "$2" | awk '{if ($1 < $2) print $1; else print $2}')
+  if [[ "$2" = "$MIN" ]]; then
     return 0 # true
   else
     return 1 # false
@@ -87,16 +87,16 @@ greater() { # return true if $1 is greater that $2
 
 evalAndPrint() {
   SENSORREADING=$1
-  if greater $CRITLOW $SENSORREADING; then
+  if greater "$CRITLOW" "$SENSORREADING"; then
     echo "CRITICAL - $TEXT is lower than critical low [$CRITLOW] $PERFDATA"
     exit $STATE_CRITICAL
-  elif greater $SENSORREADING $CRITHIGH; then
+  elif greater "$SENSORREADING" "$CRITHIGH"; then
     echo "CRITICAL - $TEXT is higher than critical high [$CRITHIGH] $PERFDATA"
     exit $STATE_CRITICAL
-  elif greater $WARNLOW $SENSORREADING; then
+  elif greater "$WARNLOW" "$SENSORREADING"; then
     echo "WARNING - $TEXT is lower than warning low [$WARNLOW] $PERFDATA"
     exit $STATE_WARNING
-  elif greater $SENSORREADING $WARNHIGH; then
+  elif greater "$SENSORREADING" "$WARNHIGH"; then
     echo "WARNING - $TEXT is higher than warning high [$WARNHIGH] $PERFDATA"
     exit $STATE_WARNING
   else
@@ -130,7 +130,6 @@ do
       exit $STATE_UNKNOWN;;
   esac
 done
-shift $(($OPTIND - 1))
 
 # Validate arguments
 TIMEOUT=${TIMEOUT:=$TIMEOUTDEF}
@@ -186,25 +185,25 @@ fi
 CURLRESP=$(makeTempFile)
 CURLERR=$(makeTempFile)
 curl --fail --silent --show-error --user-agent "Monitoring plugin $SCRIPT-$VERSION@$(hostname)" --connect-timeout 5 \
-  --max-time $TIMEOUT http://$HOSTNAME -o $CURLRESP 2>$CURLERR \
-  || { echo "Error: $(cat $CURLERR)"; exit $STATE_UNKNOWN; }
+  --max-time "$TIMEOUT" http://"$HOSTNAME" -o "$CURLRESP" 2>"$CURLERR" \
+  || { echo "Error: $(cat "$CURLERR")"; exit $STATE_UNKNOWN; }
 
-FWVER=$(grep 'FW-ver:' $CURLRESP | cut -d ' ' -f2)
-SENSORSTATUS=$(grep 'Sensor status:' $CURLRESP | cut -d ' ' -f3)
-SENSORSN=$(grep 'Sensor-S/N:' $CURLRESP | cut -d ' ' -f2)
-SENSORTEMP=$(grep 'Temp-C:' $CURLRESP | cut -d ' ' -f2)
-SENSORRHUM=$(grep 'RelHum-Pct:' $CURLRESP | cut -d ' ' -f2)
+FWVER=$(grep 'FW-ver:' "$CURLRESP" | cut -d ' ' -f2)
+SENSORSTATUS=$(grep 'Sensor status:' "$CURLRESP" | cut -d ' ' -f3)
+SENSORSN=$(grep 'Sensor-S/N:' "$CURLRESP" | cut -d ' ' -f2)
+SENSORTEMP=$(grep 'Temp-C:' "$CURLRESP" | cut -d ' ' -f2)
+SENSORRHUM=$(grep 'RelHum-Pct:' "$CURLRESP" | cut -d ' ' -f2)
 
-if ! [[ -z "$FWVER" ]]; then
+if [[ -n "$FWVER" ]]; then
   if [[ "$SENSORSTATUS" == "Ok" ]]; then
     if [[ $TYPE = "temp" ]]; then
       TEXT="Sensor (s/n: $SENSORSN) temperature reading: $SENSORTEMP" 
       PERFDATA="| temp=$SENSORTEMP;$WARNLOW:$WARNHIGH;$CRITLOW:$CRITHIGH;;"
-      evalAndPrint $SENSORTEMP
+      evalAndPrint "$SENSORTEMP"
     else
       TEXT="Sensor (s/n: $SENSORSN) relative humidity reading: $SENSORRHUM"
       PERFDATA="| rhum=$SENSORRHUM;$WARNLOW:$WARNHIGH;$CRITLOW:$CRITHIGH;;"
-      evalAndPrint $SENSORRHUM
+      evalAndPrint "$SENSORRHUM"
     fi
   else
     echo "UNKNOWN - Sensor failure"
@@ -212,6 +211,6 @@ if ! [[ -z "$FWVER" ]]; then
   fi
 else
   echo "UNKNOWN - Invalid response from controller:"
-  head $CURLRESP
+  head "$CURLRESP"
   exit $STATE_UNKNOWN
 fi
